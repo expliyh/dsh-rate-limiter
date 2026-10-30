@@ -107,35 +107,64 @@ export function cancellableDelay(delayMs: number, signal?: AbortSignal): Promise
 }
 
 /**
- * 按供应商管理令牌桶的限速器。
- * 未配置的供应商原样放行（零侵入）。
- *
  * A rate limiter managing one token bucket per provider.
  * Unconfigured providers pass through untouched (zero intrusion).
+ *
+ * The provider set is dynamic: update() applies live configuration changes
+ * without resetting the reserved state of unchanged buckets, so a settings
+ * edit takes effect on the next request and an in-flight queue keeps its
+ * position unless that provider's rate or burst actually changed.
  */
 export class RateLimiter {
-  private readonly buckets = new Map<string, TokenBucket>();
-
-  constructor(private readonly providers: Record<string, BucketOptions>) {}
+  private readonly buckets = new Map<string, { options: BucketOptions; bucket: TokenBucket }>();
 
   /**
-   * 等待到有 token 再放行。
+   * @param providers - initial per-provider bucket options.
+   */
+  constructor(providers: Record<string, BucketOptions> = {}) {
+    this.update(providers);
+  }
+
+  /**
+   * Apply the current provider configuration.
    *
-   * @returns 是否发生了等待（被限速）。
+   * Buckets are created for new providers, rebuilt when their rate or burst
+   * changes, and removed together with providers that are no longer
+   * configured. A bucket whose options are unchanged keeps its reserved state.
    *
+   * @param providers - validated per-provider bucket options.
+   */
+  update(providers: Record<string, BucketOptions>): void {
+    for (const provider of this.buckets.keys()) {
+      if (!Object.hasOwn(providers, provider)) this.buckets.delete(provider);
+    }
+    for (const [provider, options] of Object.entries(providers)) {
+      const current = this.buckets.get(provider);
+      if (
+        current !== undefined
+        && current.options.rate === options.rate
+        && current.options.burst === options.burst
+      ) {
+        continue;
+      }
+      this.buckets.set(provider, {
+        options: { rate: options.rate, burst: options.burst },
+        bucket: new TokenBucket(options.rate, options.burst),
+      });
+    }
+  }
+
+  /**
    * Wait until a token is available, then let the request through.
    *
+   * @param provider - provider name carried by the call config.
+   * @param signal - abort signal that cancels a queued wait.
    * @returns whether a wait occurred (i.e. the request was rate-limited).
    */
   async wait(provider: string, signal?: AbortSignal): Promise<boolean> {
-    const options = this.providers[provider];
-    if (!options) return false;
-    let bucket = this.buckets.get(provider);
-    if (!bucket) {
-      bucket = new TokenBucket(options.rate, options.burst);
-      this.buckets.set(provider, bucket);
-    }
-    const waitMs = bucket.reserve();
+    const entry = this.buckets.get(provider);
+    if (entry === undefined) return false;
+    const waitMs = entry.bucket.reserve();
     if (waitMs > 0) await cancellableDelay(waitMs, signal);
     return waitMs > 0;
   }

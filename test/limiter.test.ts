@@ -121,4 +121,53 @@ describe("RateLimiter", () => {
     controller.abort();
     await expect(waiting).resolves.toBe(true);
   });
+
+  it("update 新增供应商后才开始限速", async () => {
+    const limiter = new RateLimiter();
+    await expect(limiter.wait("p")).resolves.toBe(false);
+    limiter.update({ p: { rate: 1, burst: 1 } });
+    await expect(limiter.wait("p")).resolves.toBe(false);
+    const waiting = limiter.wait("p");
+    vi.advanceTimersByTime(1000);
+    await expect(waiting).resolves.toBe(true);
+  });
+
+  it("update 改变 rate 后重建桶并按新速率排队", async () => {
+    const limiter = new RateLimiter({ p: { rate: 1, burst: 1 } });
+    await limiter.wait("p");
+    limiter.update({ p: { rate: 2, burst: 1 } });
+    // A rebuilt bucket starts full again; the old bucket would still wait 1s.
+    await expect(limiter.wait("p")).resolves.toBe(false);
+    const waiting = limiter.wait("p");
+    vi.advanceTimersByTime(500);
+    await expect(waiting).resolves.toBe(true);
+  });
+
+  it("update 改变 burst 后重建桶并按新容量放行", async () => {
+    const limiter = new RateLimiter({ p: { rate: 1, burst: 1 } });
+    await limiter.wait("p");
+    limiter.update({ p: { rate: 1, burst: 2 } });
+    await expect(limiter.wait("p")).resolves.toBe(false);
+    await expect(limiter.wait("p")).resolves.toBe(false);
+    const waiting = limiter.wait("p");
+    vi.advanceTimersByTime(1000);
+    await expect(waiting).resolves.toBe(true);
+  });
+
+  it("update 移除供应商后原样放行", async () => {
+    const limiter = new RateLimiter({ p: { rate: 1, burst: 1 } });
+    await limiter.wait("p");
+    limiter.update({});
+    await expect(limiter.wait("p")).resolves.toBe(false);
+  });
+
+  it("update 配置未变时保留桶状态（不重置排队）", async () => {
+    const limiter = new RateLimiter({ p: { rate: 1, burst: 2 } });
+    await limiter.wait("p");
+    await limiter.wait("p");
+    limiter.update({ p: { rate: 1, burst: 2 } });
+    const waiting = limiter.wait("p");
+    vi.advanceTimersByTime(1000);
+    await expect(waiting).resolves.toBe(true);
+  });
 });
