@@ -6,9 +6,12 @@ DeepSeek Harness（`dsh`）的**主动限速**插件：在模型请求发出**�
 
 与官方 `dsh-llm-retry`（失败后指数退避）互补：限速在前（预防），退避在后（兜底），互不干扰。
 
+要求 `dsh >=0.2.2-alpha.2`。
+
 ## 特性
 
 - 按供应商令牌桶限速，且在请求发出**之前**生效（主动预防）
+- 实时配置：`enabled` 与 `providers` 为 volatile 插件设置，可在 Web 插件行表单中直接编辑，下一次请求即生效（无需重启）
 - 超限请求延迟排队而非拒绝（不触发 429、不丢请求）
 - 未配置的供应商原样放行（零侵入）
 - 排队等待响应取消信号，用户停止时立即中断
@@ -49,7 +52,17 @@ dsh plugin --profile web add .
 
 ## 配置
 
-在 profile 的 `cordis.patch.yml`（或本插件 `cordis.patch.yml`）中按供应商配置令牌桶：
+插件行为 `rate-limiter`，暴露两个 volatile 字段：`enabled` 与 `providers`。
+
+### Web 表单（实时生效）
+
+打开 **设置 -> 插件 -> dsh-rate-limiter**，编辑 `enabled` 或某供应商的 `rate` / `burst`。volatile 字段写入 profile 设置层，并在下一次模型请求时生效；无需重启、无需重载插件。
+
+设置 namespace 即插件行 id（`rate-limiter`）；若在自定义 profile 中重命名该行，表单写入的是重命名后的 namespace。
+
+### profile 补丁
+
+也可在 profile 的 `cordis.patch.yml`（或本插件 `cordis.patch.yml`）中设置初始值：
 
 ```yaml
 - id: rate-limiter
@@ -71,7 +84,7 @@ dsh plugin --profile web add .
 
 ## 工作原理
 
-插件挂在 `agent/request` waterfall 上，先 `await next()` 拿到含供应商的调用配置，再按供应商做令牌桶检查，不足则延迟排队（等待期间响应取消信号，用户停止时立即中断），然后原样返回配置。不修改请求内容、不改路由、不吞错误，只控制何时发出。
+插件挂在 `agent/request` waterfall 上，先 `await next()` 拿到含供应商的调用配置，再读取 volatile 配置。插件被禁用时原样放行；否则把当前供应商映射应用到限速器——新增供应商建桶、`rate` / `burst` 变化只重建该供应商的桶、移除的供应商删除其桶——再做按供应商的令牌桶检查。不足则延迟排队（等待期间响应取消信号，用户停止时立即中断），然后原样返回配置。不修改请求内容、不改路由、不吞错误，只控制何时发出。
 
 限速算法为手写令牌桶（预约式，并发安全），零第三方限速库依赖。
 

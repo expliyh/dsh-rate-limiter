@@ -6,9 +6,12 @@ A **proactive rate limiter** plugin for DeepSeek Harness (`dsh`): it controls th
 
 It complements the official `dsh-llm-retry` (exponential backoff after failure): rate limiting comes first (prevention), backoff comes last (safety net); the two do not interfere with each other.
 
+Requires `dsh >=0.2.2-alpha.2`.
+
 ## Features
 
 - Per-provider token bucket, enforced **before** the request is sent (proactive prevention)
+- Live configuration: `enabled` and `providers` are volatile plugin settings, editable from the Web plugin-row form and applied on the next request (no restart)
 - Over-limit requests are queued with a delay instead of rejected (no 429s, no lost requests)
 - Unconfigured providers pass through untouched (zero intrusion)
 - Queued waits honor the abort signal: stopping the user interrupts the wait immediately
@@ -49,7 +52,17 @@ After installing, `dsh --profile web --dump-config` should show the plugin entry
 
 ## Configuration
 
-Configure the token bucket per provider in the profile's `cordis.patch.yml` (or this plugin's `cordis.patch.yml`):
+The plugin row is `rate-limiter` and exposes two volatile fields: `enabled` and `providers`.
+
+### Web form (live)
+
+Open **Settings -> Plugins -> dsh-rate-limiter** and edit `enabled` or a provider's `rate` / `burst`. Volatile fields are written to the profile settings layer and take effect on the next model request; no restart and no plugin remount.
+
+The settings namespace is the plugin-row id (`rate-limiter`), so if you rename the row in your own profile, the form writes to the renamed namespace.
+
+### Profile patch
+
+Set the initial values in the profile's `cordis.patch.yml` (or this plugin's `cordis.patch.yml`):
 
 ```yaml
 - id: rate-limiter
@@ -71,7 +84,7 @@ Configure the token bucket per provider in the profile's `cordis.patch.yml` (or 
 
 ## How It Works
 
-The plugin hooks onto the `agent/request` waterfall: it `await next()` first to obtain the call config (which carries the provider), then performs a per-provider token bucket check; when tokens are insufficient, it queues the request with a delay (interrupted immediately by the abort signal when the user stops), then returns the config unchanged — it never modifies request content, never changes routing, never swallows errors. It only controls *when* a request is issued.
+The plugin hooks onto the `agent/request` waterfall: it `await next()` first to obtain the call config (which carries the provider), then reads the volatile config. When the plugin is disabled it forwards the call untouched; otherwise it applies the current provider map to the limiter — a new provider gets a bucket, a changed `rate` / `burst` rebuilds only that provider's bucket, a removed provider drops its bucket — and performs the per-provider token bucket check. When tokens are insufficient, it queues the request with a delay (interrupted immediately by the abort signal when the user stops), then returns the config unchanged — it never modifies request content, never changes routing, never swallows errors. It only controls *when* a request is issued.
 
 The rate-limiting algorithm is a hand-written reservation-based token bucket (concurrency-safe), with zero third-party rate-limiting dependencies.
 
