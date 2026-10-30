@@ -1,21 +1,24 @@
 name: pr-source
 
-# Only pull requests from the `dev` branch may target `main`.
-# The job runs on every PR to main; `main` branch protection requires this
-# check ("Require dev source branch"), so a PR from any other branch cannot
-# merge. Direct pushes to main are blocked by "Require a pull request".
+# Pull request sources are constrained per target branch:
+# - PRs targeting `main` must come from `dev`   (check: Require dev source branch)
+# - PRs targeting `stable` must come from `main` (check: Require main source branch)
+# Both checks are required by the corresponding branch protection, so direct
+# pushes and PRs from other branches cannot land on those branches.
 
 on:
   pull_request:
     branches:
       - main
+      - stable
 
 permissions:
   contents: read
 
 jobs:
-  source:
+  main-source:
     name: Require dev source branch
+    if: github.event.pull_request.base.ref == 'main'
     runs-on: ubuntu-latest
     steps:
       - name: Verify head branch is dev
@@ -27,3 +30,18 @@ jobs:
             exit 1
           fi
           echo "Source branch is dev: $HEAD_REF"
+
+  stable-source:
+    name: Require main source branch
+    if: github.event.pull_request.base.ref == 'stable'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify head branch is main
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          if [ "$HEAD_REF" != "main" ]; then
+            echo "PRs targeting stable must come from 'main'; got '$HEAD_REF'." >&2
+            exit 1
+          fi
+          echo "Source branch is main: $HEAD_REF"
