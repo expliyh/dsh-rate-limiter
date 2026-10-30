@@ -1,0 +1,57 @@
+name: require-signatures
+
+# Every commit in a pull request targeting a protected branch must carry a
+# verified GPG signature. Required by main and stable branch protection
+# (check: "Require GPG-signed commits"), so an unsigned PR cannot merge.
+#
+# A commit counts as signed only when GitHub reports
+# `commit.verification.verified == true` AND the signature type is GPG, which
+# means the signing key must be registered on the account and its email must
+# match the commit author/committer email.
+#
+# To accept SSH signatures as well, drop the `signature_type` comparison below.
+
+on:
+  pull_request:
+    branches:
+      - main
+      - stable
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  signatures:
+    name: Require GPG-signed commits
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify every PR commit is GPG-signed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          mapfile -t shas < <(gh api "repos/$REPO/pulls/$PR/commits" --paginate --jq '.[].sha')
+          if [ "${#shas[@]}" -eq 0 ]; then
+            echo "::error::No commits found in pull request"
+            exit 1
+          fi
+          failed=0
+          for sha in "${shas[@]}"; do
+            row="$(gh api "repos/$REPO/commits/$sha" --jq '.commit.verification | [.verified, .signature_type, .reason] | @tsv')"
+            IFS=$'\t' read -r verified signature_type reason <<< "$row"
+            echo "$sha verified=$verified type=$signature_type reason=$reason"
+            if [ "$verified" != "true" ]; then
+              echo "::error::Commit $sha has no verified signature (type=$signature_type reason=$reason)"
+              failed=1
+            elif [ "$signature_type" != "GPG" ]; then
+              echo "::error::Commit $sha is signed with $signature_type; GPG is required"
+              failed=1
+            fi
+          done
+          if [ "$failed" -ne 0 ]; then
+            exit 1
+          fi
+          echo "All ${#shas[@]} PR commit(s) are GPG-signed"
