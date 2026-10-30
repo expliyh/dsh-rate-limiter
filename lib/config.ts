@@ -1,3 +1,12 @@
+/**
+ * Plugin configuration schema and provider validation.
+ *
+ * The enabled and providers fields are volatile: dsh settings surfaces them in
+ * the "Settings -> Plugins" form of the plugin row and applies edits live, so
+ * apply receives stable Volatile references and reads the current snapshot
+ * with get() instead of capturing the value once.
+ */
+import type { Volatile } from "@deepseek-ai/cordis";
 import z from "@deepseek-ai/schemastery";
 import type { BucketOptions } from "./limiter.js";
 
@@ -30,25 +39,27 @@ export const BucketSchema = z.object({
   },
 });
 
-/** 插件配置接口 */
+/** 插件配置接口（volatile 字段在 apply 收到时是稳定引用） */
 export interface Config {
   /** 是否启用限速 */
-  enabled: boolean
+  enabled: Volatile<boolean>
   /** 按供应商配置的令牌桶参数 */
-  providers: Record<string, BucketConfig>
+  providers: Volatile<Record<string, BucketConfig>>
 }
 
 /** 插件配置 schema（Schemastery 校验，自动生成设置 UI） */
 export const Config = z.object({
   enabled: z.boolean()
     .default(true)
-    .description("启用/禁用限速插件。Enable or disable the rate limiter."),
+    .description("启用/禁用限速插件。Enable or disable the rate limiter.")
+    .volatile(),
   providers: z.dict(BucketSchema)
     .default({})
     .description(
       "按供应商名称配置限速参数，键名为供应商标识。"
       + " Rate-limit parameters per provider, keyed by provider name.",
-    ),
+    )
+    .volatile(),
 }).i18n({
   "zh-CN": {
     enabled: "启用限速",
@@ -57,35 +68,34 @@ export const Config = z.object({
 });
 
 /**
- * 解析并校验插件配置（Cordis 已按 Config schema 校验，此处补齐默认值）。
- * 供网关与限速器读取实时合成配置。
+ * Validate the live providers snapshot and project it to limiter options.
  *
- * Parse and validate plugin config (Cordis already validates against the
- * Config schema; here we just fill in the defaults). Consumed by the gateway
- * and the limiter to read the live composed config.
+ * The cordis Loader already validates the plugin config against Config; this
+ * re-checks the values the limiter depends on because the snapshot can come
+ * from a live settings edit. Absent or null means "no provider is
+ * rate-limited".
+ *
+ * @param value - current providers snapshot (the get() result).
+ * @returns validated per-provider bucket options.
+ * @throws when providers is not an object or a rate/burst value is invalid.
  */
-export function resolveConfig(
-  config: unknown = {},
-): { enabled: boolean; providers: Record<string, BucketOptions> } {
-  const raw = (config ?? {}) as Record<string, unknown>;
+export function resolveProviders(value: unknown): Record<string, BucketOptions> {
   const providers: Record<string, BucketOptions> = {};
-  const providersRaw = raw.providers;
-  if (providersRaw !== undefined && providersRaw !== null) {
-    if (typeof providersRaw !== "object") {
-      throw new Error("rate-limiter: providers 必须为对象");
-    }
-    for (const [provider, value] of Object.entries(providersRaw as Record<string, unknown>)) {
-      const options = (value ?? {}) as Record<string, unknown>;
-      const rate = options.rate;
-      const burst = options.burst;
-      if (typeof rate !== "number" || !Number.isFinite(rate) || rate <= 0) {
-        throw new Error(`rate-limiter: 供应商 "${provider}" 的 rate 必须为正数`);
-      }
-      if (typeof burst !== "number" || !Number.isInteger(burst) || burst < 1) {
-        throw new Error(`rate-limiter: 供应商 "${provider}" 的 burst 必须为正整数`);
-      }
-      providers[provider] = { rate, burst };
-    }
+  if (value === undefined || value === null) return providers;
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("rate-limiter: providers must be an object keyed by provider name");
   }
-  return { enabled: raw.enabled !== false, providers };
+  for (const [provider, raw] of Object.entries(value as Record<string, unknown>)) {
+    const options = (raw ?? {}) as Record<string, unknown>;
+    const rate = options.rate;
+    const burst = options.burst;
+    if (typeof rate !== "number" || !Number.isFinite(rate) || rate <= 0) {
+      throw new Error('rate-limiter: provider "' + provider + '" rate must be a positive number');
+    }
+    if (typeof burst !== "number" || !Number.isInteger(burst) || burst < 1) {
+      throw new Error('rate-limiter: provider "' + provider + '" burst must be a positive integer');
+    }
+    providers[provider] = { rate, burst };
+  }
+  return providers;
 }
