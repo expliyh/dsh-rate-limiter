@@ -1,0 +1,29 @@
+name: pr-source
+
+# Only pull requests from the `dev` branch may target `main`.
+# The job runs on every PR to main; `main` branch protection requires this
+# check ("Require dev source branch"), so a PR from any other branch cannot
+# merge. Direct pushes to main are blocked by "Require a pull request".
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  source:
+    name: Require dev source branch
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify head branch is dev
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          if [ "$HEAD_REF" != "dev" ]; then
+            echo "PRs targeting main must come from 'dev'; got '$HEAD_REF'." >&2
+            exit 1
+          fi
+          echo "Source branch is dev: $HEAD_REF"
