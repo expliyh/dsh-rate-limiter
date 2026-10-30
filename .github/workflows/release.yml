@@ -1,9 +1,11 @@
 name: release
 
-# 触发与流程：
-#  - PR 到 master：跑检查（门禁，阻挡不合规提交）
-#  - push 到 master：跑检查，随后若 package.json 版本尚未发布到 npm，
-#    自动创建 v<version> 标签并发布（版本已存在则跳过——幂等，可安全重跑）。
+# 触发与流程（本 fork 中已关闭自动触发）：
+#  - 本仓库是个人 fork，Actions 尚未启用；为避免日后开启 Actions 后 push/PR
+#    即自动发布，触发器已改为仅 workflow_dispatch（Actions 页面手动运行）。
+#  - 恢复自动发布：把 on: 段换回 pull_request/push（master）触发器。
+#  - 手动运行：跑检查，随后若 package.json 版本尚未发布到 npm，自动创建
+#    v<version> 标签并发布（版本已存在则跳过——幂等，可安全重跑）。
 # 鉴权使用 npm Trusted Publishing（OIDC），无需 NPM_TOKEN：
 # 1. 先手动发布首个版本（npm publish --access public）
 # 2. 在 npmjs.com 该包页面配置 Trusted Publisher：
@@ -12,12 +14,8 @@ name: release
 # 3. 仓库必须公开；Node >= 22.14 自带 npm >= 11.5.1 以支持 provenance。
 
 on:
-  pull_request:
-    branches:
-      - master
-  push:
-    branches:
-      - master
+  # fork 中关闭自动触发：不再响应 push/PR，仅在 Actions 页面手动运行。
+  workflow_dispatch:
 
 # 默认最小权限；发布 job 单独提升。
 permissions:
@@ -55,8 +53,8 @@ jobs:
 
   publish:
     needs: check
-    # 仅 master push 触发发布；PR 只跑检查。
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    # 仅手动运行且位于 master 时发布；自动触发已关闭（见文件头说明）。
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     permissions:
       contents: write # 创建并推送 v<version> 标签
